@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>MNIST - Demo TFJS</title>
+
+  <!-- Cargar TFJS (última estable) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap');
+    body { 
+       font-family: 'Poppins', sans-serif;
+      padding: 18px; 
+
+      background-image: url("./image.jpg");  
+      background-size: cover;      
+      background-position: center;  
+      background-repeat: no-repeat; 
+
+      display: flex;
+      flex-direction: column;
+      align-items: center;      
+      justify-content: center;  
+      min-height: 100vh;        
+      margin: 0; 
+    }
+    h1 {
+      color: #001624;
+      font-size: 50px;
+      margin: 0 10px
+    }
+    p {
+      font-size: 20px;
+      font-style: oblique;
+      font-weight: bold; 
+    }
+    #canvas { border: 2px solid #333; background: black; cursor: crosshair; touch-action: none; }
+    #controls { margin-top: 12px; }
+    #pred { font-size: 1.25rem; margin-top: 10px; font-family: monospace; }
+    #logs { font-size: 0.85rem; color: #444; margin-top: 8px; white-space: pre-wrap; }
+    button { margin-right: 6px; }
+  </style>
+</head>
+<body>
+  <h1>IDENTIFICADOR DE NUMEROS</h1>
+  <p>Dibuja un dígito en el canvas (blanco sobre negro). El sistema intentará centrar y normalizar al estilo MNIST.</p>
+
+  <canvas id="canvas" width="380" height="380" style="border-radius: 20px;"></canvas>
+
+  <div id="controls">
+    <button id="clearBtn">Limpiar</button>
+    <button id="predictBtn">Predecir</button>
+    <select id="modelChoice">
+      <option value="tfjs_target_dir/model.json" selected>tfjs_target_dir/model.json</option>
+      <!-- ALTERNATIVA: ruta absoluta al archivo subido en el entorno (no válida en navegador normal) -->
+      <option value="/mnt/data/model.json">/mnt/data/model.json (local container path)</option>
+    </select>
+  </div>
+
+  <div id="pred">Predicción: <span id="predVal">--</span></div>
+  <div id="logs"></div>
+
+<script>
+(async () => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const clearBtn = document.getElementById('clearBtn');
+  const predictBtn = document.getElementById('predictBtn');
+  const predVal = document.getElementById('predVal');
+  const logs = document.getElementById('logs');
+  const modelChoice = document.getElementById('modelChoice');
+
+  // Inicializar canvas (fondo negro, línea blanca)
+  ctx.fillStyle = 'black';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.strokeStyle = 'white';
+  ctx.lineWidth = 22;
+  ctx.lineCap = 'round';
+
+  let drawing = false;
+  function pointerPos(e) {
+    const r = canvas.getBoundingClientRect();
+    const x = (e.clientX ?? e.touches?.[0]?.clientX) - r.left;
+    const y = (e.clientY ?? e.touches?.[0]?.clientY) - r.top;
+    return {x, y};
+  }
+
+  canvas.addEventListener('pointerdown', e=>{ drawing = true; const p = pointerPos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); e.preventDefault(); });
+  canvas.addEventListener('pointerup', e=>{ drawing = false; ctx.beginPath(); });
+  canvas.addEventListener('pointermove', e=>{ if(!drawing) return; const p = pointerPos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); ctx.beginPath(); ctx.moveTo(p.x,p.y); });
+
+  clearBtn.onclick = () => { ctx.fillRect(0,0,canvas.width,canvas.height); predVal.textContent = '--'; logs.textContent=''; };
+
+  // Util: agregar texto al log
+  function addLog(s){ logs.textContent += s + '\\n'; console.log(s); }
+
+  // Función para preprocesar imagen estilo MNIST:
+  // - convertir a 2D grayscale array
+  // - recortar caja con contenido
+  // - centrar en 20x20 y luego pad/resize a 28x28
+  function preprocessCanvasToTensor() {
+    // 1) Obtener ImageData
+    const tmp = document.createElement('canvas');
+    tmp.width = canvas.width; tmp.height = canvas.height;
+    const tctx = tmp.getContext('2d');
+    tctx.drawImage(canvas, 0, 0);
+    const imgd = tctx.getImageData(0,0,tmp.width,tmp.height);
+    const data = imgd.data;
+
+    // 2) Convertir a grayscale (white strokes on black background)
+    const w = tmp.width, h = tmp.height;
+    const gray = new Float32Array(w*h);
+    for (let i=0;i<w*h;i++){
+      const r = data[i*4], g = data[i*4+1], b = data[i*4+2];
+      // luminance
+      gray[i] = (r + g + b) / 3.0;
+    }
+
+    // 3) Encontrar bounding box del contenido (umbral simple)
+    let minX=w, minY=h, maxX=0, maxY=0, found=false;
+    for (let y=0;y<h;y++){
+      for (let x=0;x<w;x++){
+        const v = gray[y*w + x];
+        if (v > 10) { // threshold: pixel no negro
+          found = true;
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (!found) {
+      // Nothing drawn: return a black 28x28 tensor
+      return tf.zeros([1,28,28,1]);
+    }
+
+    // 4) Crop the image to bbox with small margin
+    const pad = 8;
+    minX = Math.max(0, minX - pad);
+    minY = Math.max(0, minY - pad);
+    maxX = Math.min(w-1, maxX + pad);
+    maxY = Math.min(h-1, maxY + pad);
+    const cropW = maxX - minX + 1;
+    const cropH = maxY - minY + 1;
+
+    // Draw crop into a temporary canvas for resizing
+    const cropC = document.createElement('canvas');
+    cropC.width = cropW; cropC.height = cropH;
+    const cc = cropC.getContext('2d');
+    cc.putImageData(tctx.getImageData(minX, minY, cropW, cropH), 0, 0);
+
+    // Resize to fit into 20x20 box while preserving aspect ratio
+    const targetBox = 20;
+    let scale = targetBox / Math.max(cropW, cropH);
+    const newW = Math.round(cropW * scale);
+    const newH = Math.round(cropH * scale);
+
+    const resizeC = document.createElement('canvas');
+    resizeC.width = targetBox; resizeC.height = targetBox;
+    const rc = resizeC.getContext('2d');
+    // fill black background
+    rc.fillStyle = 'black';
+    rc.fillRect(0,0,resizeC.width, resizeC.height);
+    // draw centered
+    const dx = Math.round((targetBox - newW)/2);
+    const dy = Math.round((targetBox - newH)/2);
+    rc.drawImage(cropC, 0, 0, cropW, cropH, dx, dy, newW, newH);
+
+    // Now create a 28x28 canvas and paste the 20x20 into center (4 px padding)
+    const finalC = document.createElement('canvas');
+    finalC.width = 28; finalC.height = 28;
+    const fc = finalC.getContext('2d');
+    fc.fillStyle = 'black';
+    fc.fillRect(0,0,28,28);
+    fc.drawImage(resizeC, 4, 4);
+
+    // Get image data and convert to tensor expecting shape [1,28,28,1]
+    const finalId = fc.getImageData(0,0,28,28);
+    // Convert to tensor (grayscale) and invert colors: canvas white strokes -> high values,
+    // but MNIST digits are white on black (we already have white strokes), normalize to [0,1]
+    let t = tf.browser.fromPixels(finalId, 1).toFloat(); // shape [28,28,1]
+    // Normalize 0..255 -> 0..1
+    t = t.div(255.0);
+    // Some models expect channel-last and normalized; also expand dims to [1,28,28,1]
+    t = t.expandDims(0);
+    return t;
+  }
+
+  // Model handling:
+  let model = null;
+
+  async function testFetch(url) {
+    try {
+      const r = await fetch(url, {cache: 'no-store'});
+      addLog('Fetch ' + url + ' status=' + r.status + ' content-type=' + (r.headers.get('content-type')||''));
+      return r.status;
+    } catch(e){
+      addLog('Fetch error: ' + e.message);
+      return null;
+    }
+  }
+
+  async function loadModelFrom(url) {
+    addLog('Intentando cargar: ' + url);
+    // Primero comprobar si el archivo es accesible
+    const st = await testFetch(url);
+    if (st !== 200) throw new Error('Model JSON no accesible (status='+st+'). Asegúrate de que model.json y los .bin están en la carpeta pública del servidor.');
+
+    // Intentar como GraphModel primero (recomendado si convertiste desde SavedModel)
+    try {
+      model = await tf.loadGraphModel(url);
+      addLog('Modelo cargado con loadGraphModel() OK');
+      return;
+    } catch (errGraph) {
+      addLog('loadGraphModel falló: ' + errGraph.message);
+      // Intentar cargar como LayersModel
+      try {
+        model = await tf.loadLayersModel(url);
+        addLog('Modelo cargado con loadLayersModel() OK');
+        return;
+      } catch (errLayers) {
+        addLog('loadLayersModel falló: ' + errLayers.message);
+        throw new Error('No se pudo cargar el modelo como GraphModel ni LayersModel.');
+      }
+    }
+  }
+
+  // Hook botón predecir
+  predictBtn.onclick = async () => {
+    predVal.textContent = '...';
+    try {
+      if (!model) {
+        const chosen = modelChoice.value;
+        await loadModelFrom(chosen);
+      }
+      const t = preprocessCanvasToTensor(); // [1,28,28,1]
+      // Asegúrate que el tipo sea float32
+      const t32 = t.toFloat();
+      let out;
+      try {
+        out = model.predict(t32); // suele funcionar en GraphModel y LayersModel
+      } catch(e) {
+        addLog('model.predict falló, intentando execute: ' + e.message);
+        out = model.execute(t32);
+      }
+      // Normalizar salida si es tensor o array
+      let probs = out;
+      if (Array.isArray(out)) probs = out[0];
+      // Asegurar tensor
+      if (!probs.dataSync) probs = tf.tensor(probs);
+      const data = probs.dataSync();
+      let maxI = 0;
+      for (let i=1;i<data.length;i++) if (data[i] > data[maxI]) maxI = i;
+      predVal.textContent = maxI + '  (p=' + (data[maxI]*100).toFixed(1) + '%)';
+      // limpieza
+      if (out.dispose) out.dispose();
+      t.dispose(); t32.dispose();
+    } catch (err) {
+      addLog('Error en predicción: ' + err.message);
+      predVal.textContent = 'ERR';
+    }
+  };
+
+  // Auto-intento de chequeo rápido si ya existen archivos en la carpeta pública
+  // (El option seleccionado por defecto es tfjs_target_dir/model.json)
+  addLog('Nota: Si usas archivos subidos, coloca model.json y .bin dentro de la carpeta pública y selecciona la ruta correcta en el selector.');
+  addLog('Ruta local del model.json (subido al contenedor): /mnt/data/model.json');
+  addLog('Si tu servidor sirve desde el directorio donde colocaste tfjs_target_dir, el valor por defecto funciona: tfjs_target_dir/model.json');
+
+})();
+</script>
+
+</body>
+</html>
