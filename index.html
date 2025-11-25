@@ -26,41 +26,133 @@
       min-height: 100vh;        
       margin: 0; 
     }
-    h1 {
-      color: #001624;
-      font-size: 50px;
-      margin: 0 10px
+    .comic-text {
+      font-family: "Comic Sans MS", "Comic Sans", cursive;
+      font-size: 60px;
+      font-weight: 900;
+      text-transform: uppercase;
+      color: #ffeb3b; /* amarillo brillante */
+      text-align: center;
+      letter-spacing: 2px;
+       margin: 0 10px;
+
+      /* Borde negro grueso estilo cómic */
+      -webkit-text-stroke: 4px #000;
+
+      /* Sombra estilo cómic */
+      text-shadow:
+        6px 6px 0px #000,
+        -3px 3px 0px #000,
+        3px -3px 0px #000;
+
+      /* Suavizado extra */
+      filter: drop-shadow(2px 2px 4px rgba(0,0,0,0.5));
     }
     p {
       font-size: 20px;
       font-style: oblique;
       font-weight: bold; 
     }
+    .shimmer-button {
+      position: relative;
+      padding: 12px 24px;
+      color: white;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .shimmer-button::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: -150%;
+      width: 200%;
+      height: 100%;
+      background: linear-gradient(
+        120deg,
+        transparent,
+        rgba(255,255,255,0.5),
+        transparent
+      );
+      animation: shimmer 1.5s infinite;
+    }
+
+    @keyframes shimmer {
+      0% { transform: translateX(0); }
+      100% { transform: translateX(150%); }
+    }
+
+    .sparkles-text {
+      position: relative;
+      display: inline-block;
+      font-size: 60px;
+      font-weight: 700;
+      color: #b6f5c1; /* Verde pastel */
+      text-shadow: 0px 0px 10px rgba(182, 245, 193, 0.8);
+    }
+
+    /* Sparkles */
+    .sparkles-text::after {
+      content: "";
+      position: absolute;
+      top: -20px;
+      left: -20px;
+      width: calc(100% + 40px);
+      height: calc(100% + 40px);
+      pointer-events: none;
+
+      /* Destellos en tono verde pastel */
+      background-image:
+        radial-gradient(circle, rgba(182, 245, 193, 0.9) 0%, rgba(182, 245, 193, 0) 60%),
+        radial-gradient(circle, rgba(182, 245, 193, 0.7) 0%, rgba(182, 245, 193, 0) 60%),
+        radial-gradient(circle, rgba(182, 245, 193, 1) 0%, rgba(182, 245, 193, 0) 60%),
+        radial-gradient(circle, rgba(182, 245, 193, 1) 0%, rgba(182, 245, 193, 0) 60%);
+
+      background-size: 
+        8px 8px,
+        10px 10px,
+        6px 6px,
+        12px 12px;
+
+      background-position: 
+        20% 30%,
+        80% 20%,
+        60% 70%,
+        30% 80%;
+
+      background-repeat: no-repeat;
+
+      animation: sparkles 2.5s infinite ease-in-out;
+    }
+
+    @keyframes sparkles {
+      0% { opacity: 0.3; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.1); }
+      100% { opacity: 0.3; transform: scale(1); }
+    }
+
     #canvas { border: 2px solid #333; background: black; cursor: crosshair; touch-action: none; }
     #controls { margin-top: 12px; }
-    #pred { font-size: 1.25rem; margin-top: 10px; font-family: monospace; }
-    #logs { font-size: 0.85rem; color: #444; margin-top: 8px; white-space: pre-wrap; }
+    #logs { font-size: 0.85rem; color: black; margin-top: 8px; white-space: pre-wrap; }
     button { margin-right: 6px; }
   </style>
 </head>
 <body>
-  <h1>IDENTIFICADOR DE NUMEROS</h1>
-  <p>Dibuja un dígito en el canvas (blanco sobre negro). El sistema intentará centrar y normalizar al estilo MNIST.</p>
+  <h1 class="comic-text">IDENTIFICADOR DE NUMEROS</h1>
+  <p>Dibuja un dígito del 0 al 9 en el canvas (blanco sobre negro). El sistema intentará centrar y normalizar al estilo MNIST.</p>
 
-  <canvas id="canvas" width="380" height="380" style="border-radius: 20px;"></canvas>
+  <canvas id="canvas" width="280" height="280" style="border-radius: 20px;"></canvas>
 
   <div id="controls">
-    <button id="clearBtn">Limpiar</button>
-    <button id="predictBtn">Predecir</button>
-    <select id="modelChoice">
+    <button id="clearBtn" class="shimmer-button" style="background: #909497;">Limpiar</button>
+    <button id="predictBtn" class="shimmer-button" style="background: #884EA0;">Predecir</button>
+    <select id="modelChoice" style="display:none;">
       <option value="tfjs_target_dir/model.json" selected>tfjs_target_dir/model.json</option>
-      <!-- ALTERNATIVA: ruta absoluta al archivo subido en el entorno (no válida en navegador normal) -->
       <option value="/mnt/data/model.json">/mnt/data/model.json (local container path)</option>
     </select>
   </div>
 
-  <div id="pred">Predicción: <span id="predVal">--</span></div>
-  <div id="logs"></div>
+  <div id="pred" class="sparkles-text">Predicción: <span id="predVal">--</span></div>
+  <div id="logs" style="display:none;"></div>
 
 <script>
 (async () => {
